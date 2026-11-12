@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Train, Prompt or Risk?</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap">
+<style>
+/* Layout: one centred column; header, a reasoning strip, then a single SVG holding the Venn and the term tray beneath it. */
+:root{
+  --bg:#f3f5f8; --surface:#ffffff; --fg:#1b2230; --muted:#5d6678; --line:#c9d0dc;
+  --train:#2f6fd6; --prompt:#d08a12; --risk:#a8347a;
+  --ok:#1f8a4c; --bad:#d6312a;
+  --display:"Nunito",Arial,system-ui,sans-serif; --body:"Nunito",Arial,system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#12161e; --surface:#1c2230; --fg:#e7ebf2; --muted:#9aa4b6; --line:#384157;
+  --train:#6b9cf0; --prompt:#e6a93a; --risk:#d567a6; --ok:#47c07a; --bad:#ff5a52; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#12161e; --surface:#1c2230; --fg:#e7ebf2; --muted:#9aa4b6; --line:#384157;
+  --train:#6b9cf0; --prompt:#e6a93a; --risk:#d567a6; --ok:#47c07a; --bad:#ff5a52; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--body)}
+.wrap{max-width:1120px;margin:0 auto;padding-block:24px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:14px}
+header{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:12px}
+h1{font-family:var(--display);font-size:clamp(1.5rem,4vw,2.1rem);margin:0;text-wrap:balance;letter-spacing:-.01em}
+.sub{margin:4px 0 0;color:var(--muted);max-width:60ch;line-height:1.45}
+.stats{display:flex;gap:8px;font-variant-numeric:tabular-nums;font-size:.85rem}
+.stat{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 10px}
+.stat b{font-family:var(--display)}
+.why{min-height:2.6em;border-left:3px solid var(--line);padding:6px 12px;background:var(--surface);border-radius:0 6px 6px 0;line-height:1.4;font-size:.92rem}
+.why.ok{border-left-color:var(--ok)} .why.bad{border-left-color:var(--bad)}
+.why strong{font-family:var(--display)}
+.board{overflow-x:auto}
+svg{display:block;width:100%;height:auto;user-select:none;-webkit-user-select:none}
+.circle{stroke-width:1.5}
+.clabel{font-family:var(--display);font-weight:700;font-size:15px;letter-spacing:.02em}
+.trayline{stroke:var(--line);stroke-dasharray:3 4}
+.traylabel{fill:var(--muted);font-size:10px;letter-spacing:.12em;text-transform:uppercase}
+.chip{cursor:grab;touch-action:none}
+.chip rect{fill:var(--surface);stroke:var(--fg);stroke-width:1}
+.chip text{fill:var(--fg);font-family:var(--body);font-size:11px;font-weight:700;dominant-baseline:central;text-anchor:middle;pointer-events:none}
+.chip.dragging{cursor:grabbing}
+.chip.dragging rect{stroke-width:1.2;filter:drop-shadow(0 2px 3px rgba(0,0,0,.25))}
+.chip.locked{cursor:pointer}
+.chip.locked rect{stroke:var(--ok)}
+.chip.wrong rect{stroke:var(--bad);fill:var(--bad)}
+.chip.wrong text{fill:#fff}
+.chip:focus-visible rect{stroke-width:2;stroke:var(--train)}
+.controls{display:flex;gap:8px;flex-wrap:wrap}
+button{font-family:var(--body);font-size:.85rem;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:6px;padding:7px 14px;cursor:pointer}
+button:hover{border-color:var(--fg)}
+button:focus-visible{outline:2px solid var(--train);outline-offset:2px}
+.done{font-family:var(--display);font-weight:700;fill:var(--ok);font-size:14px;text-anchor:middle}
+@media (prefers-reduced-motion:reduce){.chip{transition:none!important}}
+</style>
+<style>body{margin:0}</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Train, Prompt or Risk?</h1>
+      <p class="sub">Drag each AI term into the Venn. Some belong to one circle, three sit where two circles overlap, and one belongs in all three.</p>
+    </div>
+    <div class="stats" aria-live="polite">
+      <span class="stat">Placed <b id="placed">0</b>/10</span>
+      <span class="stat">Misses <b id="misses">0</b></span>
+    </div>
+  </header>
+  <div class="why" id="why" aria-live="polite">Pick up a term and drop it where you think it belongs. Tap a placed term to see why it sits there.</div>
+  <div class="board"><svg id="svg" viewBox="0 0 860 570" role="application" aria-label="Venn diagram sorting game"></svg></div>
+  <div class="controls">
+    <button id="reset" type="button">Start again</button>
+    <button id="reveal" type="button">Reveal answers</button>
+  </div>
+</div>
+
+<script>
+(function(){
+const NS="http://www.w3.org/2000/svg";
+const svg=document.getElementById("svg");
+const R=150, CEN=[[230,215],[410,215],[320,371]], H=20, PADX=9, GAP=6, TRAY_X=680;
+const NAMES=["Happens during training","Happens when you prompt","A risk to manage"];
+const COLS=["--train","--prompt","--risk"];
+const TERMS=[
+ {t:"Bias",s:[0,1,2],why:"Skewed training data builds it in, the way you prompt can amplify it, and it is a risk you have to manage."},
+ {t:"Tokenisation",s:[0,1],why:"Text is split into tokens when the model is trained and again every time you send a prompt. It is plumbing, not a risk."},
+ {t:"Data poisoning",s:[0,2],why:"Someone tampers with the training data so the model learns harmful or wrong behaviour."},
+ {t:"Hallucination",s:[1,2],why:"It shows up in the answer to your prompt: confident output that is false."},
+ {t:"Pre-training",s:[0],why:"The model learns general patterns from a huge body of text before anyone prompts it."},
+ {t:"Fine-tuning",s:[0],why:"Extra training on a narrower dataset to specialise the model for a task."},
+ {t:"Few-shot prompting",s:[1],why:"You put a few worked examples in your prompt to show the pattern you want."},
+ {t:"Context window",s:[1],why:"How much text the model can take into account at once when you prompt it."},
+ {t:"Shadow AI",s:[2],why:"Staff using AI tools the organisation has not approved. Nothing to do with how a model is trained or prompted."},
+ {t:"Over-reliance",s:[2],why:"Trusting AI output without checking it. A people risk, not a model process."}
+];
+const key=s=>s.slice().sort().join("");
+const el=(n,a,p)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e;};
+
+// ---------- static drawing ----------
+const gC=el("g",{},svg);
+CEN.forEach((c,i)=>el("circle",{class:"circle",cx:c[0],cy:c[1],r:R,style:`fill:var(${COLS[i]});fill-opacity:.12;stroke:var(${COLS[i]})`},gC));
+const LBL=[[160,40,"middle"],[480,40,"middle"],[320,552,"middle"]];
+LBL.forEach((l,i)=>{const t=el("text",{class:"clabel",x:l[0],y:l[1],"text-anchor":l[2],style:`fill:var(${COLS[i]})`},svg);t.textContent=NAMES[i];});
+el("line",{class:"trayline",x1:TRAY_X-22,x2:TRAY_X-22,y1:20,y2:550},svg);
+const tl=el("text",{class:"traylabel",x:TRAY_X,y:40},svg);tl.textContent="Terms to sort";
+const doneTxt=el("text",{class:"done",x:TRAY_X,y:80,"text-anchor":"start",style:"text-anchor:start"},svg);
+const gChips=el("g",{},svg);
+
+// ---------- geometry ----------
+function inside(x,y){return CEN.map((c,i)=>Math.hypot(x-c[0],y-c[1])<R?i:-1).filter(i=>i>=0);}
+function clear(px,py,S){let m=1e9;for(let i=0;i<3;i++){const d=Math.hypot(px-CEN[i][0],py-CEN[i][1]);const s=S.includes(i)?R-d:d-R;if(s<m)m=s;}return m;}
+function rectClear(cx,cy,w,S){let m=1e9;const x0=cx-w/2,x1=cx+w/2,y0=cy-H/2,y1=cy+H/2;
+  for(let x=x0;x<=x1+.1;x+=4){m=Math.min(m,clear(x,y0,S),clear(x,y1,S));}
+  for(let y=y0;y<=y1+.1;y+=4){m=Math.min(m,clear(x0,y,S),clear(x1,y,S));}return m;}
+// Finds the spot inside a region where the chip(s) sit furthest from every circle edge.
+function placeRegion(S,widths){let best=null;const tot=widths.length*H+(widths.length-1)*GAP;
+  for(let x=60;x<=580;x+=2)for(let y=40;y<=540;y+=2){let m=1e9;
+    for(let k=0;k<widths.length;k++){m=Math.min(m,rectClear(x,y-tot/2+H/2+k*(H+GAP),widths[k],S));if(m<(best?best.m:-1e9))break;}
+    if(!best||m>best.m)best={m,pos:widths.map((w,k)=>[x,y-tot/2+H/2+k*(H+GAP)])};}
+  return best.pos;}
+
+// ---------- chips ----------
+let chips=[], placed=0, misses=0, why=document.getElementById("why");
+function build(){
+  gChips.textContent="";chips=[];
+  TERMS.forEach((d,i)=>{
+    const g=el("g",{class:"chip",tabindex:"0",role:"button","aria-label":d.t},gChips);
+    const r=el("rect",{height:H,rx:H/2,y:-H/2},g);
+    const tx=el("text",{x:0,y:.5},g);tx.textContent=d.t;
+    const w=Math.ceil(tx.getComputedTextLength())+PADX*2;
+    r.setAttribute("width",w);r.setAttribute("x",-w/2);
+    chips.push({d,g,w,locked:false,x:0,y:0,home:[0,0],slot:null});
+  });
+  // target slots per region
+  const groups={};chips.forEach(c=>{(groups[key(c.d.s)]=groups[key(c.d.s)]||[]).push(c);});
+  Object.values(groups).forEach(list=>{const pos=placeRegion(list[0].d.s,list.map(c=>c.w));list.forEach((c,k)=>c.slot=pos[k]);});
+  layoutTray();
+}
+function layoutTray(){
+  const free=chips.filter(c=>!c.locked);
+  for(let i=free.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[free[i],free[j]]=[free[j],free[i]];}
+  free.forEach((c,i)=>{c.home=[TRAY_X+c.w/2,66+i*(H+14)];move(c,...c.home,true);});
+}
+function move(c,x,y,anim){c.x=x;c.y=y;c.g.style.transition=anim?"transform .28s ease":"none";c.g.setAttribute("transform",`translate(${x} ${y})`);c.g.style.transform=`translate(${x}px,${y}px)`;}
+function stats(){document.getElementById("placed").textContent=placed;document.getElementById("misses").textContent=misses;
+  doneTxt.textContent="";if(placed===10){[["All ten placed",0],[misses===0?"No misses":`${misses} miss${misses===1?"":"es"}`,20]].forEach(([s,dy])=>{const t=el("tspan",{x:TRAY_X,dy:dy},doneTxt);t.textContent=s;});}}
+function say(html,cls){why.className="why"+(cls?" "+cls:"");why.innerHTML=html;}
+function lock(c,quiet){c.locked=true;c.g.classList.add("locked");c.g.setAttribute("aria-label",`${c.d.t}, placed`);gChips.appendChild(c.g);move(c,...c.slot,true);
+  placed++;stats();if(!quiet)say(`<strong>${c.d.t}</strong>: ${c.d.why}`,"ok");}
+function reject(c){misses++;stats();c.g.classList.add("wrong");
+  say(`<strong>${c.d.t}</strong> doesn't belong there. Ask: does it happen in training, when you prompt, is it a risk, or more than one of these?`,"bad");
+  setTimeout(()=>{c.g.classList.remove("wrong");move(c,...c.home,true);},450);}
+function drop(c,x,y){const S=inside(x,y);
+  if(!S.length){move(c,...c.home,true);return;}
+  if(key(S)===key(c.d.s))lock(c);else reject(c);}
+
+// ---------- pointer dragging ----------
+function pt(e){const p=svg.createSVGPoint();p.x=e.clientX;p.y=e.clientY;return p.matrixTransform(svg.getScreenCTM().inverse());}
+let drag=null;
+svg.addEventListener("pointerdown",e=>{const g=e.target.closest(".chip");if(!g)return;const c=chips.find(k=>k.g===g);
+  if(c.locked){say(`<strong>${c.d.t}</strong>: ${c.d.why}`,"ok");return;}
+  e.preventDefault();g.setPointerCapture(e.pointerId);const p=pt(e);drag={c,dx:c.x-p.x,dy:c.y-p.y,id:e.pointerId};
+  g.classList.add("dragging");gChips.appendChild(g);});
+svg.addEventListener("pointermove",e=>{if(!drag||e.pointerId!==drag.id)return;const p=pt(e);move(drag.c,p.x+drag.dx,p.y+drag.dy,false);});
+function end(e){if(!drag||e.pointerId!==drag.id)return;const c=drag.c;drag=null;c.g.classList.remove("dragging");
+  if(e.type==="pointercancel"){move(c,...c.home,true);return;}const p=pt(e);drop(c,p.x,p.y);}
+svg.addEventListener("pointerup",end);svg.addEventListener("pointercancel",end);
+
+// keyboard: Enter on a chip cycles a hint
+svg.addEventListener("keydown",e=>{const g=e.target.closest&&e.target.closest(".chip");if(!g||e.key!=="Enter")return;const c=chips.find(k=>k.g===g);
+  say(`<strong>${c.d.t}</strong>: ${c.locked?c.d.why:"drag it with a mouse or finger onto the diagram."}`);});
+
+document.getElementById("reset").addEventListener("click",()=>{chips.forEach(c=>{c.locked=false;c.g.classList.remove("locked");c.g.setAttribute("aria-label",c.d.t);});placed=0;misses=0;stats();layoutTray();
+  say("Pick up a term and drop it where you think it belongs. Tap a placed term to see why it sits there.");});
+document.getElementById("reveal").addEventListener("click",()=>{chips.filter(c=>!c.locked).forEach(c=>lock(c,true));
+  say("All answers shown. Tap any term to see the reasoning, then ask the group which placement they would challenge.");});
+
+(document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(build);
+})();
+</script>
+</body>
+</html>
